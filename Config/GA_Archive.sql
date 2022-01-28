@@ -11,7 +11,7 @@
  Target Server Version : 50734
  File Encoding         : 65001
 
- Date: 28/01/2022 16:37:05
+ Date: 28/01/2022 17:27:40
 */
 
 SET NAMES utf8mb4;
@@ -35,6 +35,6 @@ CREATE TABLE `GA_Archive`  (
   `created_at` datetime NOT NULL,
   PRIMARY KEY (`id`) USING BTREE,
   INDEX `time_tick`(`time_tick`) USING BTREE
-) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = COMPRESSED;
 
 SET FOREIGN_KEY_CHECKS = 1;
