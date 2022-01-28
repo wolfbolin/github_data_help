@@ -1,0 +1,9 @@
+.idea
+__pycache__
+log/*
+Config/*.ini
+!Config/example.ini
+Config/*.json
+!Config/example.json
+
+Debug_SSL/
