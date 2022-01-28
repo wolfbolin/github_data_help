@@ -4,12 +4,6 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 
-class MyLogFormatter(logging.Formatter):
-    def format(self, record):
-        record.relativeCreated = record.relativeCreated // 1000
-        return super().format(record)
-
-
 def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.DEBUG)
@@ -20,10 +14,10 @@ def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
         file_logger = RotatingFileHandler(
             filename=get_log_path(logger_name),
             encoding="utf-8",
-            backupCount=64)
+            backupCount=8)
         file_logger.setLevel(file_level)
         file_logger.namer = lambda x: get_log_path(logger_name, x.split('.')[-1])
-        file_format = MyLogFormatter(
+        file_format = logging.Formatter(
             fmt='%(filename)16s:%(lineno)d @%(asctime)s [%(levelname)8s] > %(message)s',
             datefmt=date_format)
         file_logger.setFormatter(file_format)
@@ -33,8 +27,8 @@ def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
     # StreamHandler logs to console
     console = logging.StreamHandler()
     console.setLevel(console_level)
-    console_format = MyLogFormatter(
-        fmt='%(module)s:%(lineno)d(%(relativeCreated)ds)@%(asctime)s [%(levelname)s] > %(message)s',
+    console_format = logging.Formatter(
+        fmt='%(module)s:%(lineno)d@%(asctime)s [%(levelname)s] > %(message)s',
         datefmt=date_format)
     console.setFormatter(console_format)
     logger.addHandler(console)

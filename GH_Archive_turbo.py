@@ -10,14 +10,17 @@ import logging
 import platform
 import requests
 from io import BytesIO
+from requests.adapters import HTTPAdapter
 from redis import ConnectionPool, StrictRedis
 from datetime import datetime, timedelta, timezone
 
-mixLogger = None
 
+def main(config: dict):
+    # 初始化logger
+    logger = Util.mix_logger("main", logging.DEBUG, logging.DEBUG)
 
-def main(config):
-    mysql_pool = Util.mysql_pool(config, "MYSQL_BOT")
+    # 连接数据库
+    mysql_pool = Util.mysql_pool(config, "MYSQL")
     redis_pool = ConnectionPool(**config["REDIS"])
     redis = StrictRedis(connection_pool=redis_pool)
 
@@ -37,18 +40,21 @@ def main(config):
     stop_time = datetime.strptime(config["PLAN"]["stop_time"], "%Y-%m-%d-%H")
     while time_tick < stop_time:
         time_tick_str = time_tick2str(time_tick)
-        mixLogger.info("Time tick: {}".format(time_tick_str))
+        logger.info("Time tick: {}".format(time_tick_str))
         if not redis.sismember("GHA_exist_time_tick", time_tick_str):
             try:
-                conn = mysql_pool.connection()
-                do_next_tick(config, conn, time_tick_str)
-                conn.close()
+                # 针对某小时的事件数据，下载，解压，分割
+                logger.info("Downloading data @{}".format(time_tick_str))
+                event_data = download_archive_data(time_tick_str)
+                Util.turbo_multiprocess(config, fetch_tick_data, time_tick_str, event_data)
                 gc.collect()
             except Exception as e:
-                mixLogger.error("[RE] Data time: {}".format(time_tick_str))
+                logger.error("[RE] Data time: {}".format(time_tick_str))
                 raise e
             # 记录下载的时间片
             redis.sadd("GHA_exist_time_tick", time_tick_str)
+        else:
+            logger.info("Time tick {} already done".format(time_tick_str))
         # 切换到下一个时间片
         time_tick += timedelta(hours=1)
 
@@ -60,33 +66,27 @@ def main(config):
     conn.close()
 
 
-def do_next_tick(config, conn, time_tick):
-    # 针对某小时的事件数据，下载，解压，分割
-    mixLogger.info("Downloading data @{}".format(time_tick))
-    event_data = download_archive_data(time_tick)
-    # 逐行读取数据并理解数据
-    for line, json_data in enumerate(event_data):
-        try:
-            # 避免多余的空行
-            json_data = json_data.strip()
-            if len(json_data) == 0:
-                continue
-            # 解析每行的Json数据
-            event = json.loads(json_data)
-            # 输出日志信息
-            msg = "<ID:{: ^16};Type:{: ^32}>".format(event["id"], event["type"])
-            msg = "Data line {}: {} @ {} UTC".format(line + 1, msg, event["created_at"])
-            mixLogger.info(msg)
-            # 写入单行数据
-            write_event_data(config, conn, time_tick, event)
-        except ValueError as e:
-            mixLogger.error("[RE] File line {}: {}".format(line + 1, json_data))
-            raise e
+def fetch_tick_data(config: dict, logger: logging.Logger, db_pool: dict, common_data, function_data):
+    time_tick = common_data
+    json_data = function_data
+
+    if len(json_data.strip()) == 0:
+        return
+    event = json.loads(json_data)
+    # 写入单行数据
+    write_event_data(config, db_pool["mysql"].connection(), time_tick, event)
+
+
+"""
+数据处理相关函数封装
+"""
 
 
 def download_archive_data(time_tick) -> list:
     url = "https://data.gharchive.org/{}.json.gz".format(time_tick)
-    http_data = requests.get(url)
+    session = requests.Session()
+    session.mount('https://', HTTPAdapter(max_retries=3))
+    http_data = session.get(url, timeout=60)
     gzip_data = BytesIO(http_data.content)
     gzip_data = gzip.GzipFile(mode="rb", fileobj=gzip_data).read()
     text_data = gzip_data.decode().split("\n")
@@ -113,11 +113,32 @@ def write_event_data(config: dict, conn: pymysql.Connection, time_tick: str, dat
     conn.commit()
 
 
-def mysql_replace_sql(table, data):
-    sql = "REPLACE INTO `{}`".format(table)
-    sql += "(`{}`)".format("`,`".join(data.keys()))
-    sql += "VALUES({})".format(("%s," * len(data.items()))[:-1])
-    return sql
+"""
+时间处理相关函数封装
+"""
+
+
+def time_tick2str(tick_now):
+    system = platform.system().lower()
+    if system == "linux":
+        tick_now = tick_now.strftime("%Y-%m-%d-%-H")  # Linux
+    elif system == "windows":
+        tick_now = tick_now.strftime("%Y-%m-%d-%#H")  # Windows
+    else:
+        tick_now = "{dt.year}-{dt.month:02d}-{dt.day:02d}-{dt.hour}".format(dt=tick_now)
+    return tick_now
+
+
+def utc_time2local_time(text: str, fmt: str) -> datetime:
+    time_data = datetime.strptime(text, fmt)
+    time_data = time_data.replace(tzinfo=timezone.utc)
+    time_data = time_data.astimezone()
+    return time_data
+
+
+"""
+数据库操作相关函数封装
+"""
 
 
 def set_app_pair(conn, app, key, val):
@@ -140,25 +161,13 @@ def get_app_pair(conn, app, key):
             return None
 
 
-def utc_time2local_time(text: str, fmt: str) -> datetime:
-    time_data = datetime.strptime(text, fmt)
-    time_data = time_data.replace(tzinfo=timezone.utc)
-    time_data = time_data.astimezone()
-    return time_data
-
-
-def time_tick2str(tick_now):
-    system = platform.system().lower()
-    if system == "linux":
-        tick_now = tick_now.strftime("%Y-%m-%d-%-H")  # Linux
-    elif system == "windows":
-        tick_now = tick_now.strftime("%Y-%m-%d-%#H")  # Windows
-    else:
-        tick_now = "{dt.year}-{dt.month:02d}-{dt.day:02d}-{dt.hour}".format(dt=tick_now)
-    return tick_now
+def mysql_replace_sql(table, data):
+    sql = "REPLACE INTO `{}`".format(table)
+    sql += "(`{}`)".format("`,`".join(data.keys()))
+    sql += "VALUES({})".format(("%s," * len(data.items()))[:-1])
+    return sql
 
 
 if __name__ == '__main__':
-    mixLogger = Util.mix_logger("main", logging.DEBUG, logging.DEBUG)
     _config = Config.get_config()
     main(_config)
