@@ -5,13 +5,13 @@ import logging
 import configparser
 
 
-def get_config(run_env=None):
+def get_config(app, run_env=None):
     # 读取配置文件
     if run_env is None:
         run_env = 'production'
     if 'SERVICE_ENV' in os.environ:
         run_env = os.environ['SERVICE_ENV']
-    config_path = '{}/{}.json'.format(os.path.split(os.path.abspath(__file__))[0], run_env)
+    config_path = '{}/{}/{}.config.json'.format(os.path.split(os.path.abspath(__file__))[0], app, run_env)
     if os.path.isfile(config_path):
         config_data = open(config_path, "r", encoding="utf-8").read()
         app_config = json.loads(config_data)

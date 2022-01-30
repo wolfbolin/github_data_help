@@ -7,7 +7,7 @@ RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.li
 	&& ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
 ENV SERVICE_ENV production
-
+ENV PYTHONPATH /var/app
 WORKDIR /var/app
 COPY . /var/app
 

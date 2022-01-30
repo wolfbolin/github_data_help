@@ -1,9 +1,9 @@
 .idea
 __pycache__
 log/*
-Config/*.ini
-!Config/example.ini
-Config/*.json
-!Config/example.json
+Config/*/*.config.ini
+!Config/*/example.config.ini
+Config/*/*.config.json
+!Config/*/example.config.json
 
 Debug_SSL/

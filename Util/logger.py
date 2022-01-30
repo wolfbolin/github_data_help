@@ -18,7 +18,7 @@ def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
         file_logger.setLevel(file_level)
         file_logger.namer = lambda x: get_log_path(logger_name, x.split('.')[-1])
         file_format = logging.Formatter(
-            fmt='%(filename)16s:%(lineno)d @%(asctime)s [%(levelname)8s] > %(message)s',
+            fmt='%(filename)16s:%(lineno)d:%(name)s @%(asctime)s [%(levelname)8s] > %(message)s',
             datefmt=date_format)
         file_logger.setFormatter(file_format)
         file_logger.doRollover()
@@ -28,7 +28,7 @@ def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
     console = logging.StreamHandler()
     console.setLevel(console_level)
     console_format = logging.Formatter(
-        fmt='%(module)s:%(lineno)d@%(asctime)s [%(levelname)s] > %(message)s',
+        fmt='%(module)s:%(lineno)d [%(name)s] @%(asctime)s [%(levelname)s] > %(message)s',
         datefmt=date_format)
     console.setFormatter(console_format)
     logger.addHandler(console)

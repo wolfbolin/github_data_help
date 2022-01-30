@@ -7,8 +7,10 @@ echo "================================"
 read -p "Which python script to execute: " file_name
 docker run -itd \
 	--name ${docker_name} \
+	--log-opt max-size=50m \
 	-e SERVICE_ENV=production \
-	-v $(pwd):/var/app \
+	-v $(dirname "$PWD"):/var/app \
+	-v /data/DataCache/aria2:/downloads \
 	${docker_name}:latest \
-  pipenv run python ${file_name}
+  pipenv run python $(basename "$PWD")/${file_name}
 docker logs -f ${docker_name}
