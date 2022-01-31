@@ -8,6 +8,7 @@ requests = "*"
 pymysql = "*"
 dbutils = "*"
 redis = "*"
+colorlog = "*"
 
 [dev-packages]
 

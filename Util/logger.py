@@ -1,6 +1,7 @@
 # coding=utf-8
 import os
 import logging
+from colorlog import ColoredFormatter
 from logging.handlers import RotatingFileHandler
 
 
@@ -18,7 +19,7 @@ def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
         file_logger.setLevel(file_level)
         file_logger.namer = lambda x: get_log_path(logger_name, x.split('.')[-1])
         file_format = logging.Formatter(
-            fmt='%(filename)16s:%(lineno)d:%(name)s @%(asctime)s [%(levelname)8s] > %(message)s',
+            fmt='[%(asctime)s]%(name)5s:%(process)-5d <%(levelname)s> | %(message)s',
             datefmt=date_format)
         file_logger.setFormatter(file_format)
         file_logger.doRollover()
@@ -27,8 +28,8 @@ def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
     # StreamHandler logs to console
     console = logging.StreamHandler()
     console.setLevel(console_level)
-    console_format = logging.Formatter(
-        fmt='%(module)s:%(lineno)d [%(name)s] @%(asctime)s [%(levelname)s] > %(message)s',
+    console_format = ColoredFormatter(
+        fmt='%(log_color)s[%(asctime)s]%(name)5s:%(process)-5d <%(levelname)s> | %(message)s',
         datefmt=date_format)
     console.setFormatter(console_format)
     logger.addHandler(console)

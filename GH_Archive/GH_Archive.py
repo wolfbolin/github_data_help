@@ -22,28 +22,27 @@ def main(config):
     logger = Util.mix_logger("main", logging.DEBUG, logging.DEBUG)
 
     # 连接数据库
-    mysql = Util.mysql_conn(config, "GHA_MYSQL")
-    redis = Util.redis_conn(config, "GHA_REDIS")
+    mysql_conn = Util.mysql_conn(config, "GHA_MYSQL")
+    redis_conn = Util.redis_conn(config, "GHA_REDIS")
 
     # 更新Redis记录
-    redis.delete("GHA_wait_for_unzip")
-    redis.delete("GHA_exist_time_tick")
-    redis.delete("GHA_downloading_num")
-    redis.delete("GHA_wait_for_download")
-    exist_time_tick = get_app_pair(mysql, "GHA", "exist_time_tick")
+    redis_conn.flushdb()
+    exist_time_tick = get_app_pair(mysql_conn, "GHA", "exist_time_tick")
     if exist_time_tick is not None:
         exist_time_tick = set(json.loads(exist_time_tick))
         if len(exist_time_tick) != 0:
-            redis.sadd("GHA_exist_time_tick", *exist_time_tick)
+            redis_conn.sadd("GHA_exist_time_tick", *exist_time_tick)
 
     # 计算所有需要下载的时间片
-    redis.delete("GHA_wait_for_download")
+    redis_conn.delete("GHA_wait_for_download")
     time_tick = str2datetime(config["PLAN"]["start_time"])
     stop_time = str2datetime(config["PLAN"]["stop_time"])
     while time_tick < stop_time:
-        redis.sadd("GHA_wait_for_download", fmt_time_tick(time_tick))
+        time_tick_str = fmt_time_tick(time_tick)
+        if not redis_conn.sismember("GHA_exist_time_tick", time_tick_str):
+            redis_conn.sadd("GHA_wait_for_download", time_tick_str)
         time_tick += timedelta(hours=1)
-    logger.info("共计{}个时间片需要下载".format(redis.scard("GHA_wait_for_download")))
+    logger.info("共计{}个时间片需要下载".format(redis_conn.scard("GHA_wait_for_download")))
 
     # 进程管理
     process_bin = []
@@ -60,18 +59,19 @@ def main(config):
         process_bin.append(process_pool.submit(unzip_process, config))
 
     # 等待任务结束并监控
-    redis.set("GHA_downloading_num", 0)
+    redis_conn.set("GHA_downloading_num", 0)
     while any([x.running() for x in process_bin]):
-        wait_task_num = redis.scard("GHA_wait_for_download")
-        aria2_task_num = int(redis.get("GHA_downloading_num"))
-        unzip_task_num = redis.scard("GHA_wait_for_unzip")
-        logger.info("任务状态: Wait [{:^8}] Aria2 [{:>2}/{:<2}] | Unzip [{:>2}/{:<2}]"
-                    .format(wait_task_num, aria2_task_num, config["ARIA2"]["aria2_depth"],
-                            unzip_task_num, config["ARIA2"]["unzip_depth"]))
+        msg = "任务状态: "
+        msg += "Wait download[{:^5}] ".format(redis_conn.scard("GHA_wait_for_download"))
+        msg += "Aria2[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_aria2_task_list"), config["ARIA2"]["aria2_depth"])
+        msg += "Wait unzip[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_wait_for_unzip"), config["ARIA2"]["unzip_depth"])
+        msg += "Gzip[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_gzip_task_list"), config["TURBO"]["max_process"] - 1)
+
+        logger.info(msg)
 
         # 在主进程更新记录
-        exist_time_tick = list(map(lambda x: x.decode(), list(redis.smembers("GHA_exist_time_tick"))))
-        set_app_pair(mysql, "GHA", "exist_time_tick", json.dumps(exist_time_tick))
+        exist_time_tick = list(map(lambda x: x.decode(), list(redis_conn.smembers("GHA_exist_time_tick"))))
+        set_app_pair(mysql_conn, "GHA", "exist_time_tick", json.dumps(exist_time_tick))
 
         time.sleep(1)
 
@@ -100,12 +100,14 @@ def unzip_handler(config):
 
     # 逐步消化解压任务
     logger.info("Gzip进程初始化完成")
-    while redis_conn.scard("GHA_wait_for_download") != 0 or redis_conn.scard("GHA_wait_for_unzip") != 0:
+    set_name = ["GHA_wait_for_download", "GHA_aria2_task_list", "GHA_wait_for_unzip"]
+    while any([redis_conn.scard(x) != 0 for x in set_name]):
         time_tick = redis_conn.spop("GHA_wait_for_unzip")  # 尝试取出（并发场景设计）
         if time_tick is None:
             time.sleep(1)
             continue
         time_tick = time_tick.decode()
+        redis_conn.sadd("GHA_gzip_task_list", time_tick)
         logger.info("正在解压时间片: {}".format(time_tick))
         # 解压文件
         aria2_path = config["GZIP"]["path"].format(time_tick)
@@ -119,7 +121,10 @@ def unzip_handler(config):
         os.remove(aria2_path)
         # 记录状态
         redis_conn.sadd("GHA_exist_time_tick", time_tick)
+        redis_conn.srem("GHA_gzip_task_list", time_tick)
         logger.info("时间片<{}>解压写入完成".format(time_tick))
+
+    logger.warning("Gzip进程退出")
 
 
 def write_process(*args):
@@ -190,26 +195,20 @@ def aria_handler(config):
             else:
                 logger.info("时间片<{}>下载完成".format(time_tick))
                 redis.sadd("GHA_wait_for_unzip", time_tick)  # 加入解压集合
+            redis.srem("aria2_task_list", time_tick)
             aria2.removeDownloadResult(task["gid"])
 
-        # 考虑下游流程队列深度
+        # 控制下游流程队列深度
         if redis.scard("GHA_wait_for_unzip") < config["ARIA2"]["unzip_depth"]:
-            # 获取下载器中任务量
-            active_list = aria2.tellActive()
-            active_list = set([x["files"][0]["uris"][0]["uri"].split("/")[-1].split(".")[0] for x in active_list])
-            waiting_list = aria2.tellWaiting()
-            waiting_list = set([x["files"][0]["uris"][0]["uri"].split("/")[-1].split(".")[0] for x in waiting_list])
-            download_list = set.union(active_list, waiting_list)
-            redis.set("GHA_downloading_num", str(len(download_list)))
-
             # 控制下载器中的任务量
-            if len(download_list) < config["ARIA2"]["aria2_depth"]:
+            if redis.scard("aria2_task_list") < config["ARIA2"]["aria2_depth"]:
                 time_tick = redis.spop("GHA_wait_for_download").decode()
+                redis.sadd("aria2_task_list", time_tick)
+                aria2.addUri(["https://data.gharchive.org/{}.json.gz".format(time_tick)])
                 logger.info("新增下载任务<{}>".format(time_tick))
-                download_url = ["https://data.gharchive.org/{}.json.gz".format(time_tick)]
-                aria2.addUri(download_url)
 
         time.sleep(1)
+    logger.warning("Aria2进程退出")
 
 
 if __name__ == '__main__':
