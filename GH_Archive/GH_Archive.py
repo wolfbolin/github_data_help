@@ -1,7 +1,8 @@
 # coding=utf-8
+import gc
+import os
 import gzip
 import json
-import os
 import time
 import Util
 import Config
@@ -62,7 +63,7 @@ def main(config):
     redis_conn.set("GHA_downloading_num", 0)
     while any([x.running() for x in process_bin]):
         msg = "任务状态: "
-        msg += "Wait download[{:^5}] ".format(redis_conn.scard("GHA_wait_for_download"))
+        msg += "Wait download[{:^4}] ".format(redis_conn.scard("GHA_wait_for_download"))
         msg += "Aria2[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_aria2_task_list"), config["ARIA2"]["aria2_depth"])
         msg += "Wait unzip[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_wait_for_unzip"), config["ARIA2"]["unzip_depth"])
         msg += "Gzip[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_gzip_task_list"), config["TURBO"]["max_process"] - 1)
@@ -70,10 +71,31 @@ def main(config):
         logger.info(msg)
 
         # 在主进程更新记录
-        exist_time_tick = list(map(lambda x: x.decode(), list(redis_conn.smembers("GHA_exist_time_tick"))))
-        set_app_pair(mysql_conn, "GHA", "exist_time_tick", json.dumps(exist_time_tick))
+        update_exist_time_tick(redis_conn, mysql_conn)
 
         time.sleep(1)
+    else:
+        update_exist_time_tick(redis_conn, mysql_conn)
+    logger.warning("程序准备退出：")
+    msg = "任务状态: "
+    msg += "Wait download[{:^4}] ".format(redis_conn.scard("GHA_wait_for_download"))
+    msg += "Aria2[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_aria2_task_list"), config["ARIA2"]["aria2_depth"])
+    msg += "Wait unzip[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_wait_for_unzip"), config["ARIA2"]["unzip_depth"])
+    msg += "Gzip[{:>2}/{:<2}] ".format(redis_conn.scard("GHA_gzip_task_list"), config["TURBO"]["max_process"] - 1)
+    logger.info(msg)
+    msg = ["进程状态: "]
+    for i, x in enumerate(process_bin):
+        e = x.exception()
+        if e is not None:
+            msg.append("进程<{}>异常[{}]".format(i, e))
+    if len(msg) != 1:
+        logger.error("".join(msg))
+    logger.warning("程序终止")
+
+
+def update_exist_time_tick(redis_conn, mysql_conn):
+    exist_time_tick = list(map(lambda x: x.decode(), list(redis_conn.smembers("GHA_exist_time_tick"))))
+    set_app_pair(mysql_conn, "GHA", "exist_time_tick", json.dumps(exist_time_tick))
 
 
 def unzip_process(*args):
@@ -89,14 +111,10 @@ def unzip_handler(config):
     logger = logging.getLogger("gzip")
     if config["GZIP"]["logger"]:
         logger = Util.mix_logger("gzip", logging.DEBUG)
-    logger.info("Gzip输出测试")
 
     # 连接到Redis与MySQL
     mysql_pool = Util.mysql_pool(config, "GHA_MYSQL")
     redis_conn = Util.redis_conn(config, "GHA_REDIS")
-
-    # 初始化进程池
-    executor = ThreadPoolExecutor(max_workers=config["TURBO"]["max_thread"])
 
     # 逐步消化解压任务
     logger.info("Gzip进程初始化完成")
@@ -114,6 +132,7 @@ def unzip_handler(config):
         data_file = open(aria2_path, "rb")
         gzip_data = gzip.GzipFile(mode="rb", fileobj=data_file).read()
         # 分片写入
+        executor = ThreadPoolExecutor(max_workers=config["TURBO"]["max_thread"])
         event_data = gzip_data.decode().split("\n")
         unzip_task = [executor.submit(write_process, config, mysql_pool, event, time_tick) for event in event_data]
         wait(unzip_task, return_when=ALL_COMPLETED)
@@ -123,6 +142,7 @@ def unzip_handler(config):
         redis_conn.sadd("GHA_exist_time_tick", time_tick)
         redis_conn.srem("GHA_gzip_task_list", time_tick)
         logger.info("时间片<{}>解压写入完成".format(time_tick))
+        gc.collect()
 
     logger.warning("Gzip进程退出")
 
@@ -174,7 +194,6 @@ def aria_handler(config):
     logger = logging.getLogger("aria2")
     if config["ARIA2"]["logger"]:
         logger = Util.mix_logger("aria2", logging.DEBUG)
-    logger.info("Aria2输出测试")
 
     # 连接到Redis
     redis = Util.redis_conn(config, "GHA_REDIS")
@@ -195,15 +214,15 @@ def aria_handler(config):
             else:
                 logger.info("时间片<{}>下载完成".format(time_tick))
                 redis.sadd("GHA_wait_for_unzip", time_tick)  # 加入解压集合
-            redis.srem("aria2_task_list", time_tick)
+            redis.srem("GHA_aria2_task_list", time_tick)
             aria2.removeDownloadResult(task["gid"])
 
         # 控制下游流程队列深度
         if redis.scard("GHA_wait_for_unzip") < config["ARIA2"]["unzip_depth"]:
             # 控制下载器中的任务量
-            if redis.scard("aria2_task_list") < config["ARIA2"]["aria2_depth"]:
+            if redis.scard("GHA_aria2_task_list") < config["ARIA2"]["aria2_depth"]:
                 time_tick = redis.spop("GHA_wait_for_download").decode()
-                redis.sadd("aria2_task_list", time_tick)
+                redis.sadd("GHA_aria2_task_list", time_tick)
                 aria2.addUri(["https://data.gharchive.org/{}.json.gz".format(time_tick)])
                 logger.info("新增下载任务<{}>".format(time_tick))
 

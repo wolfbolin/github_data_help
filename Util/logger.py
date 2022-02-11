@@ -19,7 +19,7 @@ def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
         file_logger.setLevel(file_level)
         file_logger.namer = lambda x: get_log_path(logger_name, x.split('.')[-1])
         file_format = logging.Formatter(
-            fmt='[%(asctime)s]%(name)5s:%(process)-5d <%(levelname)s> | %(message)s',
+            fmt='[%(asctime)s]%(name)6s:%(process)-5d<%(levelname)s> | %(message)s',
             datefmt=date_format)
         file_logger.setFormatter(file_format)
         file_logger.doRollover()
@@ -29,7 +29,7 @@ def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
     console = logging.StreamHandler()
     console.setLevel(console_level)
     console_format = ColoredFormatter(
-        fmt='%(log_color)s[%(asctime)s]%(name)5s:%(process)-5d <%(levelname)s> | %(message)s',
+        fmt='%(log_color)s[%(asctime)s]<%(levelname)s>%(name)5s:%(process)-5d | %(message)s',
         datefmt=date_format)
     console.setFormatter(console_format)
     logger.addHandler(console)
