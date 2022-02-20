@@ -10,7 +10,7 @@ docker run -itd \
 	--log-opt max-size=50m \
 	-e SERVICE_ENV=production \
 	-v $(dirname "$PWD"):/var/app \
-	-v /data/DataCache/aria2:/downloads \
+	-v /data/DataBulk/DataSet/GH_Archive:/downloads \
 	${docker_name}:latest \
   pipenv run python $(basename "$PWD")/${file_name}
 docker logs -f ${docker_name}

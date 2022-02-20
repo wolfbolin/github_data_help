@@ -7,6 +7,7 @@ from logging.handlers import RotatingFileHandler
 
 def mix_logger(logger_name, console_level=logging.DEBUG, file_level=None):
     logger = logging.getLogger(logger_name)
+    [logger.removeHandler(h) for h in logger.handlers]
     logger.setLevel(logging.DEBUG)
     date_format = '%H:%M:%S'
 
