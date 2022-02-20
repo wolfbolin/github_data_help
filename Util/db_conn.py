@@ -1,4 +1,5 @@
 # coding=utf-8
+import pymongo
 import pymysql
 from dbutils.pooled_db import PooledDB
 from redis import ConnectionPool, StrictRedis
@@ -24,3 +25,7 @@ def redis_conn(config, db_key):
 
 def redis_pool(config, db_key):
     return ConnectionPool(**config[db_key])
+
+
+def mongo_pool(config, db_key):
+    return pymongo.MongoClient(config[db_key]["uri"])

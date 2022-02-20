@@ -9,6 +9,7 @@ pymysql = "*"
 dbutils = "*"
 redis = "*"
 colorlog = "*"
+pymongo = "*"
 
 [dev-packages]
 
